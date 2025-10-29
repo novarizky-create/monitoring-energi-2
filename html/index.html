@@ -1,0 +1,227 @@
+<!doctype html>
+<html lang="id">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Dashboard IoT - Monitoring Energi</title>
+  <style>
+    :root{
+      --bg:#0f1724;
+      --card:#0b1220;
+      --accent:#06b6d4;
+      --muted:#9aa4b2;
+      --glass: rgba(255,255,255,0.03);
+      font-family: Inter, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial;
+    }
+    *{box-sizing:border-box}
+    body{margin:0; min-height:100vh; background:linear-gradient(180deg,#081226 0%, #07182a 100%); color:#e6eef6; padding:18px;}
+    .wrap{max-width:980px; margin:0 auto;}
+    header{display:flex; align-items:center; justify-content:space-between; gap:12px; margin-bottom:18px;}
+    h1{font-size:20px; margin:0;}
+    .meta{color:var(--muted); font-size:13px;}
+    .grid{display:grid; grid-template-columns:repeat(2,1fr); gap:14px;}
+    @media (max-width:700px){ .grid{grid-template-columns:1fr} }
+    .card{background:var(--card); padding:14px; border-radius:10px; box-shadow: 0 6px 18px rgba(2,6,23,0.6); }
+    .big{padding:22px; display:flex; align-items:center; justify-content:space-between;}
+    .value{font-size:28px; font-weight:700;}
+    .label{color:var(--muted); font-size:13px;}
+    .small-list{display:flex; gap:10px; flex-wrap:wrap;}
+    .item{background:var(--glass); padding:10px 12px; border-radius:8px; min-width:120px;}
+    .status{display:inline-block; padding:6px 10px; border-radius:999px; font-size:13px; font-weight:600;}
+    .ok{background: rgba(6,182,212,0.12); color:var(--accent); border:1px solid rgba(6,182,212,0.14);}
+    .err{background: rgba(255,85,85,0.08); color:#ff8a8a; border:1px solid rgba(255,85,85,0.08);}
+    footer{margin-top:18px; color:var(--muted); font-size:13px;}
+    .controls{display:flex; gap:8px; align-items:center;}
+    button{background:transparent; color:var(--muted); border:1px solid rgba(255,255,255,0.04); padding:8px 10px; border-radius:8px; cursor:pointer;}
+    button.primary{background:var(--accent); color:#072021; border:0; font-weight:700;}
+    .note{font-size:13px; color:var(--muted); margin-top:10px;}
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <header>
+      <div>
+        <h1>Dashboard Monitoring Energi</h1>
+        <div class="meta">Status &nbsp;•&nbsp; Data realtime dari ESP / API publik</div>
+      </div>
+      <div class="controls">
+        <div id="statusBadge" class="status err">Offline</div>
+        <button id="refreshBtn">Refresh</button>
+        <button id="toggleAuto" class="primary">Auto ON (5s)</button>
+      </div>
+    </header>
+
+    <main class="grid">
+      <section class="card big">
+        <div>
+          <div class="label">Tegangan (V)</div>
+          <div id="voltage" class="value">—</div>
+        </div>
+        <div>
+          <div class="label">Arus (A)</div>
+          <div id="current" class="value">—</div>
+        </div>
+        <div>
+          <div class="label">Daya (W)</div>
+          <div id="power" class="value">—</div>
+        </div>
+      </section>
+
+      <section class="card">
+        <div class="label">Ringkasan</div>
+        <div style="height:12px"></div>
+        <div class="small-list" id="summary">
+          <div class="item"><div class="label">Energy (Wh)</div><div id="energy">—</div></div>
+          <div class="item"><div class="label">Last update</div><div id="lastUpdate">—</div></div>
+          <div class="item"><div class="label">IP Device</div><div id="deviceIP">—</div></div>
+        </div>
+        <div class="note">Halaman ini mencoba mengambil data dari <code>/api/data</code> (relatif). Ubah URL di pengaturan jika server berbeda.</div>
+      </section>
+
+      <section class="card">
+        <div class="label">Grafik singkat (24 jam terakhir)</div>
+        <canvas id="miniChart" width="400" height="160" style="width:100%; height:160px; background:transparent; margin-top:10px;"></canvas>
+        <div class="note">Grafik sederhana — data disimulasikan jika API tidak respons.</div>
+      </section>
+
+      <section class="card">
+        <div class="label">Pengaturan & Info akses</div>
+        <ol style="color:var(--muted); font-size:14px; padding-left:18px;">
+          <li>Endpoint data: <code id="apiUrl">/api/data</code></li>
+          <li>Refresh otomatis: <span id="intervalLabel">5 detik</span></li>
+          <li>Untuk dapat diakses publik: upload file ini ke hosting publik (GitHub Pages / Netlify) atau letakkan pada ESP32 dan buka port / gunakan reverse-tunnel (ngrok).</li>
+        </ol>
+      </section>
+    </main>
+
+    <footer>
+      <div>Petunjuk singkat: jika menggunakan ESP32, letakkan file ini di SPIFFS/LittleFS dan buat route pada web server untuk mengembalikan `index.html`. Pastikan juga API JSON tersedia dan CORS diizinkan bila host berbeda.</div>
+    </footer>
+  </div>
+
+  <script>
+    // Konfigurasi sederhana: ubah url jika API di tempat lain
+    let CONFIG = {
+      apiUrl: ' http://192.168.4.247//api/data',    // <--- ganti ke 'http://YOUR_IP/api/data' atau URL publik jika perlu
+      autoRefresh: true,
+      intervalMs: 5000
+    };
+
+    document.getElementById('apiUrl').textContent = CONFIG.apiUrl;
+    const statusBadge = document.getElementById('statusBadge');
+    const vEl = document.getElementById('voltage');
+    const iEl = document.getElementById('current');
+    const pEl = document.getElementById('power');
+    const eEl = document.getElementById('energy');
+    const luEl = document.getElementById('lastUpdate');
+    const ipEl = document.getElementById('deviceIP');
+    const intervalLabel = document.getElementById('intervalLabel');
+    const toggleAuto = document.getElementById('toggleAuto');
+    const refreshBtn = document.getElementById('refreshBtn');
+
+    intervalLabel.textContent = (CONFIG.intervalMs/1000) + ' detik';
+
+    refreshBtn.addEventListener('click', fetchData);
+    toggleAuto.addEventListener('click', () => {
+      CONFIG.autoRefresh = !CONFIG.autoRefresh;
+      toggleAuto.textContent = CONFIG.autoRefresh ? 'Auto ON (' + (CONFIG.intervalMs/1000) + 's)' : 'Auto OFF';
+    });
+
+    // Simple chart with Canvas (no external lib)
+    const canvas = document.getElementById('miniChart');
+    const ctx = canvas.getContext('2d');
+    let chartData = Array.from({length:24},()=>0);
+
+    function drawChart(){
+      const W = canvas.width;
+      const H = canvas.height;
+      ctx.clearRect(0,0,W,H);
+      // background grid
+      ctx.fillStyle = 'rgba(255,255,255,0.02)';
+      ctx.fillRect(0,0,W,H);
+      // find max
+      const max = Math.max(...chartData, 1);
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      chartData.forEach((v,i)=>{
+        const x = (i/(chartData.length-1)) * W;
+        const y = H - (v/max) * (H - 8);
+        if(i===0) ctx.moveTo(x,y); else ctx.lineTo(x,y);
+      });
+      ctx.strokeStyle = 'rgba(6,182,212,0.85)';
+      ctx.stroke();
+    }
+
+    async function fetchData(){
+      try {
+        const resp = await fetch(CONFIG.apiUrl, {cache:'no-store'});
+        if(!resp.ok) throw new Error('HTTP ' + resp.status);
+        const data = await resp.json();
+
+        // ekspektasi JSON: { voltage: number, current: number, power: number, energy: number, ip: "..." , ts: "2025-..." }
+        const voltage = Number(data.voltage ?? data.V ?? 0);
+        const current = Number(data.current ?? data.I ?? 0);
+        const power = Number(data.power ?? data.W ?? (voltage*current).toFixed(2));
+        const energy = Number(data.energy ?? data.Wh ?? 0);
+        const ip = data.ip ?? data.device ?? location.hostname;
+        const ts = data.ts ?? new Date().toISOString();
+
+        vEl.textContent = voltage.toFixed(2) + ' V';
+        iEl.textContent = current.toFixed(3) + ' A';
+        pEl.textContent = power.toFixed(2) + ' W';
+        eEl.textContent = energy.toFixed(3) + ' Wh';
+        ipEl.textContent = ip;
+        luEl.textContent = new Date(ts).toLocaleString();
+
+        // update chart data (push power)
+        chartData.push(power);
+        if(chartData.length>24) chartData.shift();
+        drawChart();
+
+        statusBadge.textContent = 'Online';
+        statusBadge.className = 'status ok';
+      } catch(err){
+        console.warn('Fetch error', err);
+        statusBadge.textContent = 'Offline';
+        statusBadge.className = 'status err';
+
+        // simulate some data if offline (user-friendly)
+        const simulated = {
+          voltage: (220 + Math.random()*5).toFixed(2),
+          current: (0.2 + Math.random()*2).toFixed(3),
+          power: (50 + Math.random()*20).toFixed(2),
+          energy: (Math.random()*1000).toFixed(2),
+          ip: 'local-sim',
+          ts: new Date().toISOString()
+        };
+        vEl.textContent = simulated.voltage + ' V';
+        iEl.textContent = simulated.current + ' A';
+        pEl.textContent = simulated.power + ' W';
+        eEl.textContent = simulated.energy + ' Wh';
+        ipEl.textContent = simulated.ip;
+        luEl.textContent = new Date().toLocaleString();
+
+        chartData.push(Number(simulated.power));
+        if(chartData.length>24) chartData.shift();
+        drawChart();
+      }
+    }
+
+    // Auto refresh loop
+    setInterval(() => {
+      if(CONFIG.autoRefresh) fetchData();
+    }, CONFIG.intervalMs);
+
+    // first load
+    fetchData();
+
+    // Optional: allow changing apiUrl from browser dev console:
+    window.DASH_CONFIG = CONFIG;
+    window.setApiUrl = (u) => {
+      CONFIG.apiUrl = u;
+      document.getElementById('apiUrl').textContent = u;
+      fetchData();
+    };
+  </script>
+</body>
+</html>
